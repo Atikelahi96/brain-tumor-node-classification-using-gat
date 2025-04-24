@@ -25,7 +25,6 @@ brain_tumor_node_classification_complete/
 │   ├── data_preprocessing.py
 │   ├── segmentation_and_features.py
 │   ├── rag_generation.py
-│   ├── synthetic_graph.py
 │   └── train_gat.py
 ├── README.md
 ├── requirements.txt
