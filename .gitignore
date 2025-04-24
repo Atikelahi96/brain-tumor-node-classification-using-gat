@@ -1,7 +1,3 @@
-__pycache__/
-*.pyc
-dataset/
-results/
-*.nii.gz
-*.gpickle
-.env
+# Ignore all files *except* these:
+!dataset/**
+!results/**
