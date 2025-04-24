@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+dataset/
+results/
+*.nii.gz
+*.gpickle
+.env
