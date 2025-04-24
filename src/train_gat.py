@@ -4,7 +4,7 @@ import torch.nn as nn
 import torch.optim as optim
 import networkx as nx
 from torch_geometric.data import Data, DataLoader
-from torch_geometric.nn import GATConv, GraphSAGE
+from torch_geometric.nn import GATConv
 import numpy as np
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import f1_score, accuracy_score
@@ -80,42 +80,46 @@ def graph_to_pytorch_data(graph, features, labels):
 
 # Advanced Graph-SMOTE: oversample node features & labels, enhance via GraphSAGE, add k-NN edges
 
-def advanced_graph_smote(graphs, labels, k=5, weight_type='cosine'):
+def advanced_graph_smote(graphs, labels, k=5):
     smote = SMOTE()
     synthetic_graphs = []
-    all_smote_features, all_smote_labels = [], []
+    all_smote_features = []
+    all_smote_labels = []
 
     for graph, label in zip(graphs, labels):
-        feats = np.array([graph.nodes[n]['features'] for n in graph.nodes])
-        labs = np.array(label)
-        print(f"Original Label Distribution: {Counter(labs)}")
+        features = [graph.nodes[node]['features'] for node in graph.nodes]
+        features = np.array(features)
+        label = np.array(label)
 
-        sm_feats, sm_labs = smote.fit_resample(feats, labs)
-        print(f"Resampled Label Distribution: {Counter(sm_labs)}")
+        # Apply SMOTE to each graph separately
+        smote_features, smote_labels = smote.fit_resample(features, label)
 
-        # Enhance via GraphSAGE
-        edge_idx = np.array(list(graph.edges)).T
-        edge_idx = torch.tensor(edge_idx, dtype=torch.long)
-        sage = GraphSAGE(in_channels=sm_feats.shape[1], hidden_channels=32, num_layers=2)
-        enhanced = sage(torch.tensor(sm_feats, dtype=torch.float), edge_idx)
+        # Collect resampled features and labels
+        all_smote_features.extend(smote_features)
+        all_smote_labels.extend(smote_labels)
 
-        # Build synthetic graph
-        G2 = graph.copy()
-        for i, node in enumerate(G2.nodes):
-            G2.nodes[node]['features'] = enhanced[i].detach().numpy()
-            G2.nodes[node]['label'] = int(sm_labs[i])
+     
+        
+        # Create a synthetic graph with the SMOTE features
+        synthetic_graph = graph.copy()
+        for i, node in enumerate(synthetic_graph.nodes):
+            synthetic_graph.nodes[node]['features'] = smote_features[i]
+            synthetic_graph.nodes[node]['label'] = smote_labels[i]
 
-        # Add k-NN edges
-        nbrs = NearestNeighbors(n_neighbors=k, metric=weight_type).fit(sm_feats)
-        knn = nbrs.kneighbors_graph(sm_feats).tocoo()
-        for u, v in zip(knn.row, knn.col):
-            G2.add_edge(u, v)
+        # Add k-NN edges for synthetic nodes
+        nbrs = NearestNeighbors(n_neighbors=k, metric='cosine').fit(smote_features)
+        knn_edges = nbrs.kneighbors_graph(smote_features).tocoo()
+        
+        for i, j in zip(knn_edges.row, knn_edges.col):
+            synthetic_graph.add_edge(i, j)
 
-        synthetic_graphs.append(G2)
-        all_smote_features.extend(sm_feats)
-        all_smote_labels.extend(sm_labs)
+        synthetic_graphs.append(synthetic_graph)
 
-    return np.array(all_smote_features), np.array(all_smote_labels), synthetic_graphs
+    # Convert lists to numpy arrays
+    all_smote_features = np.array(all_smote_features)
+    all_smote_labels = np.array(all_smote_labels)
+
+    return all_smote_features, all_smote_labels, synthetic_graphs
 
 # Prepare train/test split of Data objects
 
