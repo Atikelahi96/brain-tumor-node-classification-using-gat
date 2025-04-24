@@ -11,7 +11,7 @@ This repository implements a graph-based approach to classify brain tumor region
 
 ## Dataset
 Download the BraTS2021 Training Data from Kaggle:
-https://www.kaggle.com/datasets/chenyizhao/brats2021-training
+https://www.kaggle.com/datasets/dschettler8845/brats-2021-task1
 
 Place each subject folder (e.g., `BraTS2021_Training_001`) into the `dataset/` directory.
 
@@ -44,13 +44,10 @@ pip install -r requirements.txt
    python src/segmentation_and_features.py
    python src/rag_generation.py
    ```
-2. **Generate Synthetic Graphs**  
-   ```bash
-   python src/synthetic_graph.py
-   ```
-3. **Train & Evaluate GAT**  
+
+2. **Train & Evaluate GAT**  
    ```bash
    python src/train_gat.py
    ```
-4. **Results**  
+3. **Results**  
    Saved graphs, synthetic graphs, and model checkpoints/logs appear in `results/`.  
