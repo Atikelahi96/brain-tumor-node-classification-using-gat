@@ -5,7 +5,7 @@ import networkx as nx
 from scipy.ndimage import binary_dilation
 
 # Import functions from local modules
-from preprocess import print_memory_usage, load_mri_data_batch, preprocess_mri_data, combine_modalities
+from data-preprocess import print_memory_usage, load_mri_data_batch, preprocess_mri_data, combine_modalities
 from segmentation_and_features import perform_superpixel_segmentation, extract_features_binary_detection
 
 # ----------------------------------------
