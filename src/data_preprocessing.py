@@ -1,8 +1,14 @@
 import os
-import psutil
 import random
 import nibabel as nib
 import numpy as np
+from skimage.segmentation import slic
+import networkx as nx
+import torch
+import psutil
+from sklearn.neighbors import KDTree
+from scipy.ndimage import binary_dilation
+from scipy.stats import scoreatpercentile
 
 def print_memory_usage(stage):
     process = psutil.Process(os.getpid())
@@ -12,73 +18,106 @@ def load_mri_data_batch(data_dir, subdirectories, modalities, batch_size):
     print("Loading MRI data...")
     num_subjects = len(subdirectories)
     num_batches = (num_subjects + batch_size - 1) // batch_size
+
     for batch_idx in range(num_batches):
-        start, end = batch_idx*batch_size, min((batch_idx+1)*batch_size, num_subjects)
-        batch = subdirectories[start:end]
-        batch_data, batch_labels = [], []
-        for sub in batch:
-            gt = load_ground_truth_labels(data_dir, sub)
-            if gt is None: continue
-            imgs = []
-            for m in modalities:
-                path = os.path.join(data_dir, sub, f'{sub}_{m}.nii.gz')
-                imgs.append(nib.load(path).get_fdata())
-            if len(imgs)==len(modalities):
-                batch_data.append(imgs)
-                batch_labels.append(gt)
-        yield batch_idx, batch_data, np.array(batch_labels)
+        start_idx = batch_idx * batch_size
+        end_idx = min((batch_idx + 1) * batch_size, num_subjects)
+        batch_subdirectories = subdirectories[start_idx:end_idx]
+
+        batch_mri_data = []
+        batch_ground_truth_labels = []
+
+        for subdir in batch_subdirectories:
+            mri_data = []
+            ground_truth_labels = load_ground_truth_labels(data_dir, subdir)
+            if ground_truth_labels is None:
+                continue
+
+            for modality in modalities:
+                modality_path = os.path.join(data_dir, subdir, f'{subdir}_{modality}.nii.gz')
+                modality_data = nib.load(modality_path).get_fdata()
+                mri_data.append(modality_data)
+
+            if len(mri_data) == len(modalities):
+                batch_mri_data.append(mri_data)
+                batch_ground_truth_labels.append(ground_truth_labels)
+
+        batch_ground_truth_labels = np.array(batch_ground_truth_labels)
+
+        yield batch_mri_data, batch_ground_truth_labels
 
 def load_ground_truth_labels(data_dir, subdirectory):
-    path = os.path.join(data_dir, subdirectory, f'{subdirectory}_seg.nii.gz')
-    if os.path.exists(path):
-        return nib.load(path).get_fdata()
+    ground_truth_path = os.path.join(data_dir, subdirectory, f'{subdirectory}_seg.nii.gz')
+    if os.path.exists(ground_truth_path):
+        ground_truth_labels = nib.load(ground_truth_path).get_fdata()
+        return ground_truth_labels
     else:
-        print(f"Missing GT for {subdirectory}")
+        print(f"Ground truth labels not found for {subdirectory}")
         return None
 
-def preprocess_mri_data(mri_data, ground_truth_labels):
+def preprocess_mri_data(mri_data, ground_truth_labels, visualize=False):
     print("Preprocessing MRI data...")
-    pre_data, pre_labels = [], []
-    for imgs, gt in zip(mri_data, ground_truth_labels):
-        min_c, max_c = None, None
-        modalities = []
-        for img in imgs:
-            nz = np.array(np.nonzero(img))
-            low, high = np.min(nz,1), np.max(nz,1)
-            cropped = img[low[0]:high[0], low[1]:high[1], low[2]:high[2]]
-            scaled = cropped / np.percentile(cropped, 99.5)
-            modalities.append(scaled)
-            min_c, max_c = low, high
-        pre_data.append(modalities)
-        gt_crop = gt[min_c[0]:max_c[0], low[1]:high[1], low[2]:high[2]]
-        pre_labels.append(gt_crop)
-    # Padding to same shape
-    shapes = [m.shape for sample in pre_data for m in sample]
-    max_shape = np.max(shapes, axis=0)
-    padded_data, padded_labels = [], []
-    for sample, gt in zip(pre_data, pre_labels):
-        pd_modalities = [np.pad(m, [(0, max_shape[i]-m.shape[i]) for i in range(3)], mode='constant') for m in sample]
-        padded_data.append(pd_modalities)
-        padded_labels.append(np.pad(gt, [(0, max_shape[i]-gt.shape[i]) for i in range(3)], mode='constant'))
-    # Normalize
-    means, stds = [], []
-    for i in range(len(padded_data[0])):
-        vox = np.concatenate([s[i][s[i]>0] for s in padded_data])
-        means.append(np.mean(vox)); stds.append(np.std(vox))
-    for s in padded_data:
-        for i in range(len(s)):
-            s[i] = (s[i] - means[i]) / stds[i]
+    preprocessed_data = []
+    preprocessed_labels = []
+
+    # Cropping and rescaling
+    for idx, (mri, gt) in enumerate(zip(mri_data, ground_truth_labels)):
+        preprocessed_modalities = []
+        min_coords, max_coords = None, None
+        for modality in mri:
+            non_zero_coords = np.array(np.nonzero(modality))
+            min_coords = np.min(non_zero_coords, axis=1)
+            max_coords = np.max(non_zero_coords, axis=1)
+            cropped_data = modality[min_coords[0]:max_coords[0],
+                                    min_coords[1]:max_coords[1],
+                                    min_coords[2]:max_coords[2]]
+
+            rescaled_img = cropped_data / np.percentile(cropped_data, 99.5)
+            preprocessed_modalities.append(rescaled_img)
+
+        preprocessed_data.append(preprocessed_modalities)
+
+        cropped_gt = gt[min_coords[0]:max_coords[0],
+                        min_coords[1]:max_coords[1],
+                        min_coords[2]:max_coords[2]]
+        preprocessed_labels.append(cropped_gt)
+
+    max_shape = np.max([modality.shape for sample in preprocessed_data for modality in sample], axis=0)
+
+    padded_data = []
+    padded_labels = []
+    for sample, gt in zip(preprocessed_data, preprocessed_labels):
+        padded_modalities = []
+        for modality in sample:
+            padded_modality = np.pad(modality, [(0, max_shape[i] - modality.shape[i]) for i in range(3)], mode='constant')
+            padded_modalities.append(padded_modality)
+        padded_data.append(padded_modalities)
+
+        padded_gt = np.pad(gt, [(0, max_shape[i] - gt.shape[i]) for i in range(3)], mode='constant')
+        padded_labels.append(padded_gt)
+
+    modality_means = []
+    modality_stds = []
+
+    for i in range(len(mri_data[0])):
+        modality_data = [sample[i] for sample in padded_data]
+        non_zero_voxels = np.concatenate([modality[modality > 0] for modality in modality_data])
+        modality_mean = np.mean(non_zero_voxels)
+        modality_std = np.std(non_zero_voxels)
+        modality_means.append(modality_mean)
+        modality_stds.append(modality_std)
+
+    for i, sample in enumerate(padded_data):
+        for j, modality in enumerate(sample):
+            normalized_img = (modality - modality_means[j]) / modality_stds[j]
+            padded_data[i][j] = normalized_img
+
     return padded_data, padded_labels
 
 def combine_modalities(all_mri_data):
-    print("Combining modalities...")
-    return [np.stack(sample, axis=-1) for sample in all_mri_data]
-
-if __name__ == "__main__":
-    data_dir = 'dataset'
-    modalities = ['t1','t1ce','t2','flair']
-    subs = sorted([d for d in os.listdir(data_dir) if os.path.isdir(os.path.join(data_dir,d))])
-    random.shuffle(subs)
-    for batch_idx, mri, gt in load_mri_data_batch(data_dir, subs, modalities, batch_size=16):
-        pd, pl = preprocess_mri_data(mri, gt)
-        # Save or pass to next steps
+    print("Combining MRI modalities...")
+    combined_images = []
+    for mri_data in all_mri_data:
+        combined_img = np.stack(mri_data, axis=-1)
+        combined_images.append(combined_img)
+    return combined_images
