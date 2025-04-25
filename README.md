@@ -13,8 +13,7 @@ This repository implements a graph-based approach to classify brain tumor region
 Download the BraTS2021 Training Data from Kaggle:
 https://www.kaggle.com/datasets/dschettler8845/brats-2021-task1
 
-![Model Architecture]
-(ModelArchitecture.png)
+![Model Architecture](ModelArchitecture.png)
 
 ## Repository Structure
 ```
